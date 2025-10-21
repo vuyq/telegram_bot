@@ -7,8 +7,7 @@ import requests
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-BOT_TOKEN = os.environ['BOT_TOKEN']
-
+BOT_TOKEN = "8442541152:AAFQX-qeG2vOYk-T4qyRGPHkYS92e7ufXv0"
 def handler(event, context):
     """
     Основной обработчик для Yandex Cloud Functions
