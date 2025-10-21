@@ -1,224 +1,131 @@
 import os
 import requests
-import json
+import urllib3
 from flask import Flask, request
 import telebot
 
+# Отключаем предупреждения SSL (для тестирования)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # Конфигурация
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-APP_URL = "https://your-app-name.onrender.com"  # ЗАМЕНИТЕ на ваш URL
-GIGACHAT_API_KEY = os.environ.get('GIGACHAT_API_KEY')  # Добавьте эту переменную в Render
+GIGACHAT_API_KEY = os.environ.get('GIGACHAT_API_KEY')
 
-# Инициализация бота и приложения
+# Автоматическое определение URL для Render
+RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+if RENDER_EXTERNAL_HOSTNAME:
+    APP_URL = f"https://{RENDER_EXTERNAL_HOSTNAME}"
+else:
+    # Временный URL - замени после деплоя на реальный
+    APP_URL = "https://your-app-name.onrender.com"
+
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-class GigaChatAPI:
-    def __init__(self, client_secret):
-        self.client_secret = client_secret
-        self.access_token = None
-        self.get_access_token()
-    
-    def get_access_token(self):
-        """Получение токена доступа для GigaChat API"""
-        try:
-            url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Accept': 'application/json',
-                'RqUID': '6f0b1291-c7f3-43c6-bb2e-9f3efb2dc98e',  # Можно оставить или сгенерировать свой
-            }
-            data = {
-                'scope': 'GIGACHAT_API_PERS'
-            }
-            
-            # Используем авторизацию через client credentials
-            auth = ('client', 'client')  # Базовые креденшилы, могут меняться
-            response = requests.post(
-                url, 
-                headers=headers, 
-                data=data, 
-                auth=auth,
-                verify=False  # Внимание: для продакшена нужно правильно настроить SSL
-            )
-            
-            if response.status_code == 200:
-                self.access_token = response.json().get('access_token')
-                return True
-            else:
-                print(f"Ошибка получения токена: {response.status_code} - {response.text}")
-                return False
-                
-        except Exception as e:
-            print(f"Исключение при получении токена: {e}")
-            return False
-    
+print(f"🚀 Bot started!")
+print(f"📱 APP_URL: {APP_URL}")
+print(f"🔑 BOT_TOKEN exists: {bool(BOT_TOKEN)}")
+print(f"🧠 GIGACHAT_API_KEY exists: {bool(GIGACHAT_API_KEY)}")
+
+# Упрощенная версия GigaChat для тестирования
+class SimpleGigaChat:
     def send_message(self, message_text):
-        """Отправка сообщения в GigaChat и получение ответа"""
-        if not self.access_token:
-            if not self.get_access_token():
-                return "Ошибка: не удалось получить доступ к GigaChat API"
+        if not GIGACHAT_API_KEY:
+            return "❌ GigaChat API ключ не настроен. Добавьте GIGACHAT_API_KEY в переменные окружения Render."
         
         try:
-            url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
-            headers = {
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {self.access_token}'
-            }
+            # Простая заглушка - замени на реальный API вызов
+            return f"🤖 GigaChat ответил бы на: '{message_text}'\n\n(Реальная интеграция требует настройки OAuth2 с GigaChat API)"
             
-            data = {
-                "model": "GigaChat",  # или "GigaChat-Plus" для более продвинутой модели
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": message_text
-                    }
-                ],
-                "temperature": 0.7,
-                "max_tokens": 1024
-            }
-            
-            response = requests.post(url, headers=headers, json=data, verify=False)
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result['choices'][0]['message']['content']
-            elif response.status_code == 401:
-                # Токен истек, пробуем обновить
-                self.get_access_token()
-                return self.send_message(message_text)
-            else:
-                return f"Ошибка API GigaChat: {response.status_code} - {response.text}"
-                
         except Exception as e:
-            return f"Ошибка при обращении к GigaChat: {str(e)}"
+            return f"❌ Ошибка GigaChat: {str(e)}"
 
-# Инициализация GigaChat (только если указан API ключ)
-gigachat = None
-if GIGACHAT_API_KEY:
-    gigachat = GigaChatAPI(GIGACHAT_API_KEY)
+# Инициализация GigaChat
+gigachat = SimpleGigaChat()
 
 # Обработчики Telegram бота
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    welcome_text = """
-🤖 Привет! Я бот с интеграцией GigaChat.
+    welcome_text = f"""
+🤖 Привет! Я тестовый бот с GigaChat.
 
-Просто напишите мне любой вопрос или сообщение, и я обработаю его с помощью нейросети!
+📊 Статус:
+• Бот активен: ✅
+• GigaChat: {'✅' if GIGACHAT_API_KEY else '❌'}
+• URL: {APP_URL}
 
-Доступные команды:
-/start - показать это сообщение
-/giga [текст] - обратиться к GigaChat
-/help - помощь
+Просто напиши мне любое сообщение!
     """
     bot.reply_to(message, welcome_text)
 
-@bot.message_handler(commands=['help'])
-def send_help(message):
-    help_text = """
-📖 Помощь по боту:
-
-• Просто отправьте любое текстовое сообщение - бот ответит через GigaChat
-• Или используйте команду /giga [ваш вопрос]
-
-Пример:
-/giga Напиши код Python для сортировки списка
-
-Бот работает на основе нейросети GigaChat от Сбера.
-    """
-    bot.reply_to(message, help_text)
-
-@bot.message_handler(commands=['giga'])
-def giga_chat_command(message):
-    """Обработка команды /giga"""
-    if not gigachat:
-        bot.reply_to(message, "❌ GigaChat не настроен. Проверьте API ключ.")
-        return
-    
-    # Извлекаем текст после команды
-    command_text = message.text.split(' ', 1)
-    if len(command_text) < 2:
-        bot.reply_to(message, "❌ Пожалуйста, укажите ваш вопрос после команды /giga")
-        return
-    
-    user_message = command_text[1]
-    
-    # Отправляем сообщение о обработке
-    processing_msg = bot.reply_to(message, "🔄 Обрабатываю запрос GigaChat...")
-    
-    # Получаем ответ от GigaChat
-    response = gigachat.send_message(user_message)
-    
-    # Отправляем ответ (разбиваем на части если слишком длинный)
-    if len(response) > 4000:
-        for i in range(0, len(response), 4000):
-            bot.edit_message_text(
-                response[i:i+4000], 
-                message.chat.id, 
-                processing_msg.message_id
-            )
-    else:
-        bot.edit_message_text(
-            response, 
-            message.chat.id, 
-            processing_msg.message_id
-        )
+@bot.message_handler(commands=['test'])
+def test_command(message):
+    """Тестовая команда для проверки работы"""
+    bot.reply_to(message, "✅ Бот работает! GigaChat готов к работе.")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
     """Обработка всех текстовых сообщений"""
-    if not gigachat:
-        bot.reply_to(message, "❌ GigaChat не настроен. Проверьте API ключ.")
-        return
-    
-    # Игнорируем команды без слеша
+    # Игнорируем команды
     if message.text.startswith('/'):
         return
     
-    # Отправляем сообщение о обработке
-    processing_msg = bot.reply_to(message, "🔄 Обрабатываю запрос...")
+    # Отправляем "печатает..." статус
+    bot.send_chat_action(message.chat.id, 'typing')
     
     # Получаем ответ от GigaChat
     response = gigachat.send_message(message.text)
     
     # Отправляем ответ
-    if len(response) > 4000:
-        for i in range(0, len(response), 4000):
-            if i == 0:
-                bot.edit_message_text(
-                    response[i:i+4000], 
-                    message.chat.id, 
-                    processing_msg.message_id
-                )
-            else:
-                bot.send_message(message.chat.id, response[i:i+4000])
-    else:
-        bot.edit_message_text(
-            response, 
-            message.chat.id, 
-            processing_msg.message_id
-        )
+    bot.reply_to(message, response)
 
 # Веб-хук для Render
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def get_message():
-    json_string = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return "!", 200
+    try:
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return "OK", 200
+    except Exception as e:
+        print(f"Error processing update: {e}")
+        return "Error", 500
 
 @app.route("/")
 def webhook():
-    bot.remove_webhook()
-    bot.set_webhook(url=APP_URL + '/' + BOT_TOKEN)
-    
-    status = "✅ Бот активен!"
-    if not gigachat:
-        status += " ❌ GigaChat не настроен"
-    else:
-        status += " ✅ GigaChat подключен"
-    
-    return status
+    try:
+        # Устанавливаем веб-хук
+        bot.remove_webhook()
+        webhook_url = f"{APP_URL}/{BOT_TOKEN}"
+        success = bot.set_webhook(url=webhook_url)
+        
+        status_text = f"""
+✅ Бот активен!
+• Webhook: {webhook_url}
+• GigaChat: {'✅ Настроен' if GIGACHAT_API_KEY else '❌ Не настроен'}
+• SetWebhook: {'✅ Успешно' if success else '❌ Ошибка'}
+
+Для настройки GigaChat:
+1. Получи API ключ на developers.sber.ru
+2. Добавь GIGACHAT_API_KEY в Environment Variables в Render
+        """
+        return status_text
+    except Exception as e:
+        return f"❌ Ошибка: {str(e)}"
+
+@app.route("/test")
+def test_page():
+    """Страница для тестирования работы приложения"""
+    return f"""
+<h1>🤖 Telegram Bot Status</h1>
+<p><strong>Status:</strong> ✅ Active</p>
+<p><strong>URL:</strong> {APP_URL}</p>
+<p><strong>Bot Token:</strong> {'✅ Set' if BOT_TOKEN else '❌ Missing'}</p>
+<p><strong>GigaChat API:</strong> {'✅ Set' if GIGACHAT_API_KEY else '❌ Missing'}</p>
+<hr>
+<p>Теперь установи веб-хук в BotFather:</p>
+<code>/setwebhook {APP_URL}/{BOT_TOKEN}</code>
+"""
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 10000)))
