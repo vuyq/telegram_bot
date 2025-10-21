@@ -1,83 +1,42 @@
-import json
 import os
-import logging
-import requests
+from flask import Flask, request
+import telebot
 
-# Настройка логирования
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# Получаем токен из переменных окружения (их мы позже зададим на Render)
+BOT_TOKEN = '8442541152:AAFQX-qeG2vOYk-T4qyRGPHkYS92e7ufXv0'
+# Ссылка на ваше приложение на Render (будет позже)
+APP_URL = f"https://your-app-name.onrender.com"
 
-BOT_TOKEN = "8442541152:AAFQX-qeG2vOYk-T4qyRGPHkYS92e7ufXv0"
-def handler(event, context):
-    """
-    Основной обработчик для Yandex Cloud Functions
-    """
-    try:
-        # Логируем входящий запрос
-        logger.info(f"Received event: {event}")
-        
-        # Парсим тело запроса
-        body = json.loads(event['body'])
-        
-        # Обрабатываем сообщение
-        if 'message' in body:
-            process_message(body['message'])
-        elif 'callback_query' in body:
-            process_callback(body['callback_query'])
-        
-        return {
-            'statusCode': 200,
-            'body': json.dumps({'status': 'ok'}),
-            'headers': {
-                'Content-Type': 'application/json'
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Error processing request: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': str(e)})
-        }
+# Создаем экземпляр бота и веб-приложения Flask
+bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
-def process_message(message):
-    """Обработка входящих сообщений"""
-    chat_id = message['chat']['id']
-    text = message.get('text', '')
-    user_name = message['from'].get('first_name', 'Пользователь')
-    
-    logger.info(f"Processing message from {user_name}: {text}")
-    
-    # Обработка команд
-    commands = {
-        '/start': f'Привет, {user_name}! Я бот на Яндекс Облаке! 🚀',
-        '/help': 'Доступные команды:\n/start - начать работу\n/help - помощь\n/info - информация',
-        '/info': 'Этот бот работает на Yandex Cloud Functions с Python'
-    }
-    
-    response_text = commands.get(text, f'Вы написали: {text}')
-    send_telegram_message(chat_id, response_text)
+# Обработчик команды /start
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(message, "Привет! Я эхо-бот. Просто напиши мне что-нибудь.")
 
-def process_callback(callback_query):
-    """Обработка callback запросов от inline кнопок"""
-    chat_id = callback_query['message']['chat']['id']
-    data = callback_query['data']
-    
-    send_telegram_message(chat_id, f'Обработан callback: {data}')
+# Обработчик всех текстовых сообщений
+@bot.message_handler(func=lambda message: True)
+def echo_all(message):
+    bot.reply_to(message, message.text)
 
-def send_telegram_message(chat_id, text):
-    """Отправка сообщения через Telegram API"""
-    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
-    
-    payload = {
-        'chat_id': chat_id,
-        'text': text,
-        'parse_mode': 'HTML'
-    }
-    
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        logger.info(f"Message sent to {chat_id}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to send message: {str(e)}")
+# Веб-хук для Render. Этот маршрут вызывается Telegram для пересылки сообщений.
+@app.route('/' + BOT_TOKEN, methods=['POST'])
+def get_message():
+    json_string = request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return "!", 200
+
+# Маршрут для установки веб-хука
+@app.route("/")
+def webhook():
+    # Удаляем старый веб-хук, ставим новый на наш URL на Render
+    bot.remove_webhook()
+    bot.set_webhook(url=APP_URL + '/' + BOT_TOKEN)
+    return "Бот активен!", 200
+
+# Этот блок кода нужен для запуска на Render
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
