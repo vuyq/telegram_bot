@@ -3,3 +3,4 @@ flask
 gunicorn
 requests
 urllib3
+tenacity
