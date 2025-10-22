@@ -5,11 +5,17 @@ import json
 import requests
 import time
 import base64
+import ssl
 
 # Конфигурация
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 GIGACHAT_API_KEY = os.environ.get('GIGACHAT_API_KEY')
 APP_URL = "https://telegram-bot-x6zm.onrender.com"
+
+# Настройки сертификатов
+CERT_PATH = os.getenv("CERT_PATH", "./cert.pem")
+CERT_URL = os.getenv("CERT_URL")
+GIGACHAT_AUTH = os.getenv("GIGACHAT_AUTH")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -17,6 +23,9 @@ app = Flask(__name__)
 print("🚀 Бот запускается...")
 print(f"🔑 Токен: {'✅' if BOT_TOKEN else '❌'}")
 print(f"🧠 GigaChat: {'✅' if GIGACHAT_API_KEY else '❌'}")
+print(f"📜 CERT_PATH: {CERT_PATH}")
+print(f"🔗 CERT_URL: {'✅' if CERT_URL else '❌'}")
+print(f"🔐 GIGACHAT_AUTH: {'✅' if GIGACHAT_AUTH else '❌'}")
 
 # Устанавливаем веб-хук
 try:
@@ -27,59 +36,151 @@ try:
 except Exception as e:
     print(f"❌ Ошибка веб-хука: {e}")
 
-# КЛАСС GIGACHAT LITE
+# КЛАСС GIGACHAT LITE С ПОДДЕРЖКОЙ СЕРТИФИКАТОВ
 class GigaChatBot:
     def __init__(self):
-        self.api_key = GIGACHAT_API_KEY
+        self.api_key = GIGACHAT_API_KEY or GIGACHAT_AUTH
         self.is_configured = bool(self.api_key)
         self.base_url = "https://gigachat.devices.sberbank.ru/api/v1"
+        self.cert_path = CERT_PATH
+        self.cert_url = CERT_URL
         
+    def _get_ssl_context(self):
+        """Создает SSL контекст с сертификатами"""
+        try:
+            context = ssl.create_default_context()
+            
+            # Если указан путь к сертификату
+            if os.path.exists(self.cert_path):
+                context.load_verify_locations(self.cert_path)
+                print(f"✅ Сертификат загружен: {self.cert_path}")
+            elif self.cert_url:
+                # Скачиваем сертификат по URL
+                try:
+                    response = requests.get(self.cert_url, timeout=10)
+                    with open('/tmp/cert.pem', 'wb') as f:
+                        f.write(response.content)
+                    context.load_verify_locations('/tmp/cert.pem')
+                    print(f"✅ Сертификат загружен по URL: {self.cert_url}")
+                except Exception as e:
+                    print(f"❌ Ошибка загрузки сертификата: {e}")
+            
+            return context
+        except Exception as e:
+            print(f"❌ Ошибка создания SSL контекста: {e}")
+            return None
+    
+    def _make_secure_request(self, method, url, **kwargs):
+        """Выполняет безопасный запрос с сертификатами"""
+        try:
+            ssl_context = self._get_ssl_context()
+            if ssl_context:
+                kwargs['verify'] = self.cert_path if os.path.exists(self.cert_path) else True
+            else:
+                # Если сертификаты не настроены, отключаем проверку (для тестирования)
+                kwargs['verify'] = False
+                print("⚠️  Проверка SSL отключена")
+            
+            response = requests.request(method, url, **kwargs)
+            return response
+        except Exception as e:
+            print(f"❌ Ошибка безопасного запроса: {e}")
+            # Пробуем без проверки SSL
+            try:
+                kwargs['verify'] = False
+                response = requests.request(method, url, **kwargs)
+                print("⚠️  Запрос выполнен без проверки SSL")
+                return response
+            except Exception as e2:
+                print(f"❌ Критическая ошибка запроса: {e2}")
+                raise
+    
     def get_auth_token(self):
         """Получает токен авторизации для GigaChat Lite"""
         try:
             if not self.api_key:
+                print("❌ API ключ не установлен")
                 return None
                 
-            # Для GigaChat Lite используем базовую аутентификацию
+            print(f"🔐 Используем API ключ: {self.api_key[:10]}...")
+            
+            # МЕТОД 1: Используем GIGACHAT_AUTH как готовый токен
+            if GIGACHAT_AUTH and len(GIGACHAT_AUTH) > 100:
+                print("✅ Используем GIGACHAT_AUTH как токен")
+                return GIGACHAT_AUTH
+            
+            # МЕТОД 2: Basic Auth
             url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
             
-            # Кодируем авторизационные данные
-            auth_string = f"{self.api_key}:{self.api_key}"
+            # Подготавливаем данные для аутентификации
+            if ":" in self.api_key:
+                login, password = self.api_key.split(":", 1)
+            else:
+                login = password = self.api_key
+            
+            auth_string = f"{login}:{password}"
             auth_base64 = base64.b64encode(auth_string.encode()).decode()
             
             headers = {
                 'Authorization': f'Basic {auth_base64}',
-                'RqUID': '123456789',  # Произвольный идентификатор
-                'Content-Type': 'application/x-www-form-urlencoded'
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Accept': 'application/json'
             }
             
             data = {
                 'scope': 'GIGACHAT_API_PERS'
             }
             
-            # Отключаем проверку SSL для тестирования
-            response = requests.post(
+            print("🔐 Пробуем Basic Auth с сертификатами...")
+            
+            response = self._make_secure_request(
+                'POST', 
                 url, 
                 headers=headers, 
                 data=data, 
-                verify=False,
                 timeout=30
             )
             
             print(f"🔐 Статус аутентификации: {response.status_code}")
-            print(f"🔐 Ответ сервера: {response.text}")
             
             if response.status_code == 200:
                 token_data = response.json()
                 access_token = token_data.get('access_token')
-                print("✅ Токен GigaChat Lite получен успешно")
-                return access_token
+                if access_token:
+                    print("✅ Токен успешно получен")
+                    return access_token
+                else:
+                    print("❌ Токен не найден в ответе")
             else:
-                print(f"❌ Ошибка аутентификации: {response.status_code} - {response.text}")
-                return None
+                print(f"❌ Ошибка аутентификации: {response.status_code}")
+                print(f"🔐 Ответ сервера: {response.text}")
+                
+                # Пробуем альтернативный scope
+                if response.status_code == 400:
+                    print("🔐 Пробуем альтернативный scope...")
+                    data['scope'] = 'GIGACHAT'
+                    
+                    response = self._make_secure_request(
+                        'POST', 
+                        url, 
+                        headers=headers, 
+                        data=data, 
+                        timeout=30
+                    )
+                    
+                    if response.status_code == 200:
+                        token_data = response.json()
+                        access_token = token_data.get('access_token')
+                        if access_token:
+                            print("✅ Токен получен с альтернативным scope")
+                            return access_token
+            
+            return None
                 
         except Exception as e:
-            print(f"❌ Ошибка получения токена GigaChat Lite: {e}")
+            print(f"❌ Критическая ошибка аутентификации: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def get_response(self, user_message):
@@ -89,35 +190,38 @@ class GigaChatBot:
         
         try:
             auth_token = self.get_auth_token()
+                
             if not auth_token:
-                return "❌ Не удалось авторизоваться в GigaChat. Проверьте API ключ."
+                error_msg = """
+❌ Не удалось авторизоваться в GigaChat. 
+
+Возможные причины:
+1. Неверный API ключ в GIGACHAT_API_KEY
+2. Ключ не активирован в личном кабинете SberBank AI
+3. Проблемы с сертификатами
+4. Неправильный scope
+
+Проверьте:
+• Корректность GIGACHAT_API_KEY в настройках Render
+• Активирован ли доступ к GigaChat API
+• Попробуйте использовать GIGACHAT_AUTH для прямого указания токена
+
+💡 Для получения API ключа:
+1. Перейдите на https://developers.sber.ru/studio/auth
+2. Авторизуйтесь через СберID
+3. Создайте новое приложение
+4. Получите Client ID и Client Secret
+5. Используйте их в формате: ClientID:ClientSecret
+"""
+                return error_msg
             
             # Создаем промпт для специализации на международных отношениях
-            system_prompt = """Ты - эксперт в области международных отношений. Твоя специализация включает:
-
-1. **Образование и поступление:**
-   - Вузы для международных отношений (МГИМО, МГУ, СПбГУ, ВШЭ, РУДН)
-   - Вступительные экзамены и требования
-   - Программы обучения и специализации
-
-2. **Основные понятия:**
-   - Дипломатия и внешняя политика
-   - Международное право
-   - Геополитика и международная безопасность
-   - Глобализация и международные экономические отношения
-
-3. **Карьера:**
-   - Дипломатическая служба
-   - Международные организации (ООН, НАТО, ЕС, ВТО, МВФ)
-   - Международный бизнес
-   - Аналитические центры и СМИ
-
-4. **Практические аспекты:**
-   - Современные международные конфликты
-   - Международные договоры и соглашения
-   - Внешняя политика России и других стран
-
-Отвечай подробно, информативно, с конкретными примерами и практическими советами. Структурируй ответы для лучшего восприятия."""
+            system_prompt = """Ты - эксперт в области международных отношений. Отвечай на вопросы профессионально и подробно по темам:
+- Поступление в вузы (МГИМО, МГУ, СПбГУ и др.)
+- Основные понятия международных отношений
+- Карьерные возможности
+- Международные организации
+- Современная геополитика"""
 
             url = f"{self.base_url}/chat/completions"
             headers = {
@@ -127,7 +231,7 @@ class GigaChatBot:
             }
             
             data = {
-                "model": "GigaChat",  # Модель по умолчанию для Lite
+                "model": "GigaChat",
                 "messages": [
                     {
                         "role": "system",
@@ -139,17 +243,16 @@ class GigaChatBot:
                     }
                 ],
                 "temperature": 0.7,
-                "max_tokens": 2000,
-                "stream": False
+                "max_tokens": 1500
             }
             
-            print(f"🧠 Отправка запроса к GigaChat Lite: {user_message[:100]}...")
+            print(f"🧠 Отправка запроса к GigaChat...")
             
-            response = requests.post(
+            response = self._make_secure_request(
+                'POST', 
                 url, 
                 headers=headers, 
                 json=data, 
-                verify=False,
                 timeout=30
             )
             
@@ -160,9 +263,15 @@ class GigaChatBot:
                 chat_response = result['choices'][0]['message']['content']
                 print(f"✅ Ответ GigaChat получен: {len(chat_response)} символов")
                 return chat_response
+            elif response.status_code == 401:
+                print("❌ Ошибка 401: Неавторизован")
+                return "❌ Ошибка авторизации GigaChat. Проверьте API ключ."
+            elif response.status_code == 403:
+                print("❌ Ошибка 403: Доступ запрещен")
+                return "❌ Доступ к GigaChat запрещен. Проверьте права доступа API ключа."
             else:
                 print(f"❌ Ошибка GigaChat API: {response.status_code} - {response.text}")
-                return f"❌ Ошибка GigaChat API: {response.status_code}. Попробуйте позже."
+                return f"❌ Ошибка GigaChat API ({response.status_code}). Попробуйте позже."
             
         except requests.exceptions.RequestException as e:
             print(f"❌ Ошибка сети GigaChat: {e}")
@@ -178,7 +287,6 @@ gigachat = GigaChatBot()
 def send_telegram_message(chat_id, text):
     """Отправляет сообщение через Telegram Bot API"""
     try:
-        # Разбиваем длинные сообщения на части (Telegram ограничение 4096 символов)
         max_length = 4000
         if len(text) > max_length:
             parts = []
@@ -187,7 +295,6 @@ def send_telegram_message(chat_id, text):
                     parts.append(text)
                     break
                 else:
-                    # Находим последний перенос строки в пределах лимита
                     split_pos = text.rfind('\n', 0, max_length)
                     if split_pos == -1:
                         split_pos = text.rfind('. ', 0, max_length)
@@ -207,8 +314,10 @@ def send_telegram_message(chat_id, text):
                     "text": part_text,
                     "parse_mode": "HTML"
                 }
-                requests.post(url, json=data, timeout=10)
-                time.sleep(0.5)  # Небольшая задержка между сообщениями
+                response = requests.post(url, json=data, timeout=10)
+                if response.status_code != 200:
+                    print(f"❌ Ошибка отправки части {i+1}: {response.text}")
+                time.sleep(0.5)
             return True
         else:
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -218,10 +327,10 @@ def send_telegram_message(chat_id, text):
                 "parse_mode": "HTML"
             }
             response = requests.post(url, json=data, timeout=10)
-            print(f"📤 Отправка сообщения в {chat_id}: {response.status_code}")
-            if response.status_code != 200:
+            success = response.status_code == 200
+            if not success:
                 print(f"❌ Ошибка Telegram API: {response.text}")
-            return response.status_code == 200
+            return success
     except Exception as e:
         print(f"❌ Ошибка отправки: {e}")
         return False
@@ -230,107 +339,62 @@ def send_telegram_message(chat_id, text):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Получаем данные
         if request.content_type != 'application/json':
-            print("❌ Неверный content-type")
             return "Invalid content-type", 400
             
         json_data = request.get_json()
         if not json_data:
-            print("❌ Пустой JSON")
             return "Empty JSON", 400
         
-        print(f"📥 Получен webhook от {json_data.get('message', {}).get('from', {}).get('first_name', 'Unknown')}")
+        print(f"📥 Получен webhook")
         
-        # РУЧНАЯ ОБРАБОТКА СООБЩЕНИЙ
         if 'message' in json_data:
             message = json_data['message']
             chat_id = message['chat']['id']
             text = message.get('text', '')
             
-            print(f"💬 Обработка сообщения: {chat_id} -> {text}")
+            print(f"💬 Сообщение: {chat_id} -> {text}")
             
-            # Обработка команды /start
             if text == '/start':
                 welcome_text = """
-🌍 ДОБРО ПОЖАЛОВАТЬ В БОТ ПО МЕЖДУНАРОДНЫМ ОТНОШЕНИЯМ!
+🌍 БОТ ПО МЕЖДУНАРОДНЫМ ОТНОШЕНИЯМ С GIGACHAT
 
-🎯 Я специализируюсь на международных отношениях и использую нейросеть GigaChat для ответов на ваши вопросы.
+🎯 Специализация:
+• Поступление в вузы (МГИМО, МГУ, СПбГУ)
+• Основные понятия международных отношений
+• Карьерные возможности
+• Международные организации
+• Современная геополитика
 
-📚 Я могу помочь с:
-• 🎓 Поступлением в вузы (МГИМО, МГУ, СПбГУ, ВШЭ, РУДН)
-• 📖 Основными понятиями международных отношений
-• 💼 Карьерными возможностями в этой сфере
-• 🏛️ Международными организациями (ООН, НАТО, ЕС, ВТО)
-• 🌐 Современными геополитическими процессами
+💡 Просто задайте вопрос о международных отношениях!
 
-💡 Просто задайте вопрос о международных отношениях, и GigaChat даст развернутый профессиональный ответ!
-
-📋 Примеры вопросов:
-"Какие экзамены нужны для поступления в МГИМО?"
-"Объясни понятие 'дипломатический иммунитет'"
-"Где можно работать после международных отношений?"
-"Расскажи о структуре и функциях ООН"
-"Какие языки важно знать международнику?"
+Примеры:
+"Какие экзамены нужны для МГИМО?"
+"Что такое дипломатический иммунитет?"
+"Где работать после международных отношений?"
 
 🚀 Начните с любого вопроса!
 """
                 send_telegram_message(chat_id, welcome_text)
-                print(f"✅ Приветствие отправлено в {chat_id}")
             
-            # Обработка команды /help
-            elif text == '/help':
-                help_text = """
-❓ ПОМОЩЬ ПО БОТУ МЕЖДУНАРОДНЫХ ОТНОШЕНИЙ
-
-🎯 Я использую нейросеть GigaChat для ответов на вопросы по:
-• 🎓 Поступлению в вузы международных отношений
-• 📚 Теории международных отношений
-• 💼 Карьерным возможностям и профессиям
-• 🏛️ Международным организациям
-• 🌍 Современной геополитике
-
-💡 Как задавать вопросы:
-Будьте конкретны - так GigaChat даст более точный и полезный ответ.
-
-📋 Примеры хороших вопросов:
-"Какие предметы ЕГЭ нужны для МГИМО на факультет международных отношений?"
-"В чем разница между дипломатией и внешней политикой?"
-"Какие карьерные перспективы у выпускников международных отношений?"
-"Расскажи о роли ООН в современном мире"
-"Как изменилась геополитика после 2022 года?"
-
-⚡ Просто напишите ваш вопрос - и получите развернутый ответ от GigaChat!
-
-🔄 Если возникли проблемы - используйте /status для проверки системы.
-"""
-                send_telegram_message(chat_id, help_text)
-            
-            # Обработка команды /status
             elif text == '/status':
-                # Тестируем подключение к GigaChat
-                test_result = "Тестируем подключение..."
-                send_telegram_message(chat_id, test_result)
-                
-                test_response = gigachat.get_response("Ответь кратко: работает ли соединение?")
-                
                 status_text = f"""
 📊 СТАТУС СИСТЕМЫ:
 
 🤖 Бот: ✅ Активен
-🧠 GigaChat Lite: {'✅ Настроен' if gigachat.is_configured else '❌ Не настроен'}
+🧠 GigaChat: {'✅ Настроен' if gigachat.is_configured else '❌ Не настроен'}
+📜 Сертификаты: {'✅' if os.path.exists(CERT_PATH) or CERT_URL else '❌'}
 🌐 Веб-хук: ✅ Работает
-💬 Чат ID: {chat_id}
 
-🔧 Тест GigaChat: {'✅ Успешно' if 'Ошибка' not in test_response else '❌ Ошибка'}
-
-💡 {test_response if len(test_response) < 100 else 'GigaChat отвечает нормально'}
-
-Всё готово к работе! Задавайте вопросы по международным отношениям! 🎓🌍
+💬 Тестируем GigaChat...
 """
                 send_telegram_message(chat_id, status_text)
+                
+                # Тестовый запрос
+                test_response = gigachat.get_response("Ответь кратко: работает ли соединение?")
+                status_text += f"\n🔧 Тест GigaChat: {'✅ Успешно' if 'Ошибка' not in test_response else '❌ Ошибка'}"
+                send_telegram_message(chat_id, status_text)
             
-            # Обработка обычных сообщений (игнорируем команды, начинающиеся с /)
             elif text and not text.startswith('/'):
                 # Показываем, что бот печатает
                 try:
@@ -343,12 +407,11 @@ def webhook():
                 print(f"🧠 Запрос к GigaChat: {text}")
                 giga_response = gigachat.get_response(text)
                 send_telegram_message(chat_id, giga_response)
-                print(f"✅ Ответ GigaChat отправлен в {chat_id}")
+                print(f"✅ Ответ отправлен в {chat_id}")
             
             else:
                 print(f"⚠️  Игнорируем сообщение: {text}")
         
-        print("✅ Webhook обработан успешно")
         return "OK", 200
         
     except Exception as e:
@@ -367,6 +430,7 @@ def test_gigachat():
         return jsonify({
             "status": "success",
             "gigachat_configured": gigachat.is_configured,
+            "certificate_configured": bool(os.path.exists(CERT_PATH) or CERT_URL),
             "test_message": test_message,
             "response": response,
             "response_length": len(response) if response else 0
@@ -381,10 +445,10 @@ def test_gigachat():
 @app.route('/')
 def home():
     return """
-    <h1>🌍 Бот по международным отношениям с GigaChat Lite</h1>
+    <h1>🌍 Бот по международным отношениям с GigaChat</h1>
     <p><strong>Status:</strong> ✅ Active</p>
-    <p><strong>AI:</strong> GigaChat Lite Integration</p>
-    <p><strong>Specialization:</strong> Международные отношения</p>
+    <p><strong>SSL Certificates:</strong> {}</p>
+    <p><strong>GigaChat:</strong> {}</p>
     
     <h3>Тесты:</h3>
     <ul>
@@ -392,41 +456,34 @@ def home():
         <li><a href="/status">Статус системы</a></li>
     </ul>
     
-    <h3>Функции:</h3>
-    <ul>
-        <li>🎓 Консультации по поступлению в вузы</li>
-        <li>📚 Объяснение понятий международных отношений</li>
-        <li>💼 Карьерные возможности</li>
-        <li>🏛️ Международные организации</li>
-        <li>🧠 Ответы от нейросети GigaChat Lite</li>
-    </ul>
-    
-    <p>Отправьте боту /start в Telegram!</p>
-    """
+    <p>Отправьте /start боту в Telegram!</p>
+    """.format(
+        '✅ Configured' if os.path.exists(CERT_PATH) or CERT_URL else '❌ Not configured',
+        '✅ Configured' if gigachat.is_configured else '❌ Not configured'
+    )
 
 @app.route('/status')
 def status():
     return jsonify({
         "bot_status": "active",
         "gigachat_configured": gigachat.is_configured,
+        "certificate_configured": bool(os.path.exists(CERT_PATH) or CERT_URL),
         "webhook_set": True
     })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     print(f"🌐 Сервер запущен на порту {port}")
-    print(f"🧠 GigaChat Lite: {'✅ Настроен' if gigachat.is_configured else '❌ Не настроен'}")
-    print(f"🎯 Специализация: Международные отношения")
-    print("📝 Отправьте /start боту в Telegram!")
+    print(f"🔐 GigaChat: {'✅ Настроен' if gigachat.is_configured else '❌ Не настроен'}")
+    print(f"📜 Сертификаты: {'✅ Настроены' if os.path.exists(CERT_PATH) or CERT_URL else '❌ Не настроены'}")
     
-    # Тестовый запрос к GigaChat при запуске
+    # Тестовый запрос
     if gigachat.is_configured:
-        print("🧪 Тестируем подключение к GigaChat Lite...")
+        print("🧪 Тестируем GigaChat...")
         try:
-            test_response = gigachat.get_response("Привет! Ответь кратко одним предложением.")
-            print(f"✅ GigaChat тест: Успешно ({len(test_response)} символов)")
-            print(f"📄 Ответ: {test_response[:100]}...")
+            test_response = gigachat.get_response("Тестовое сообщение")
+            print(f"✅ GigaChat тест: {'Успешно' if 'Ошибка' not in test_response else 'Ошибка'}")
         except Exception as e:
-            print(f"❌ GigaChat тест: Ошибка - {e}")
+            print(f"❌ GigaChat тест: {e}")
     
     app.run(host='0.0.0.0', port=port, debug=False)
