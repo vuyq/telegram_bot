@@ -2,6 +2,7 @@ import os
 import telebot
 from flask import Flask, request
 import json
+import requests
 
 # Конфигурация
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -35,14 +36,10 @@ class GigaChatBot:
         
         try:
             # ПРОСТАЯ ИМИТАЦИЯ GIGACHAT ДЛЯ ТЕСТА
-            # ЗАМЕНИ ЭТУ ЧАСТЬ НА РЕАЛЬНЫЙ API GIGACHAT
-            
             responses = [
                 f"🤖 GigaChat: Привет! Ты спросил: '{user_message}'",
                 f"🧠 Нейросеть: Я обработал ваш запрос: '{user_message}'", 
                 f"🎯 GigaChat ответ: Это интересный вопрос: '{user_message}'",
-                f"💡 ИИ: По вашему запросу '{user_message}' я могу помочь!",
-                f"🚀 GigaChat: Отличный вопрос! '{user_message}'"
             ]
             
             import random
@@ -54,10 +51,27 @@ class GigaChatBot:
 # Инициализируем GigaChat
 gigachat = GigaChatBot()
 
-# ОБРАБОТЧИК START С GIGACHAT
+# ФУНКЦИЯ ДЛЯ ОТПРАВКИ СООБЩЕНИЙ ЧЕРЕЗ API TELEGRAM
+def send_telegram_message(chat_id, text):
+    """Отправляет сообщение через Telegram Bot API"""
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            "chat_id": chat_id,
+            "text": text
+        }
+        response = requests.post(url, json=data)
+        print(f"📤 Отправка сообщения в {chat_id}: {response.status_code}")
+        return response.status_code == 200
+    except Exception as e:
+        print(f"❌ Ошибка отправки: {e}")
+        return False
+
+# ОБРАБОТЧИК START
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    print(f"🎯 Получен /start от {message.chat.id}")
+    chat_id = message.chat.id
+    print(f"🎯 Получен /start от {chat_id}")
     
     welcome_text = f"""
 🎉 ПРИВЕТ! Я ТЕЛЕГРАМ БОТ С GIGACHAT!
@@ -74,67 +88,50 @@ def send_welcome(message):
 Напиши что-нибудь и увидишь ответ от GigaChat!
 """
     
-    bot.send_message(message.chat.id, welcome_text)
-    print(f"✅ Отправлено приветствие в чат {message.chat.id}")
+    # ОТПРАВЛЯЕМ СООБЩЕНИЕ НАПРЯМУЮ ЧЕРЕЗ API
+    success = send_telegram_message(chat_id, welcome_text)
+    if success:
+        print(f"✅ Приветствие отправлено в {chat_id}")
+    else:
+        print(f"❌ Не удалось отправить приветствие в {chat_id}")
 
-# ОБРАБОТЧИК TEST С GIGACHAT
+# ОБРАБОТЧИК TEST
 @bot.message_handler(commands=['test'])
 def test_gigachat(message):
-    print(f"🧪 Тест GigaChat от {message.chat.id}")
+    chat_id = message.chat.id
+    print(f"🧪 Тест GigaChat от {chat_id}")
     
-    test_response = gigachat.get_response("Тестовое сообщение для проверки GigaChat")
-    bot.send_message(message.chat.id, test_response)
+    test_response = gigachat.get_response("Тестовое сообщение")
+    send_telegram_message(chat_id, test_response)
 
-# ОБРАБОТЧИК STATUS
-@bot.message_handler(commands=['status'])
-def show_status(message):
-    status_text = f"""
-📊 СТАТУС СИСТЕМЫ:
-
-• 🤖 Бот: ✅ Активен
-• 🧠 GigaChat: {'✅ Настроен' if gigachat.is_configured else '❌ Не настроен'}
-• 🌐 Сервер: {APP_URL}
-• 🔑 API ключ: {'✅ Присутствует' if GIGACHAT_API_KEY else '❌ Отсутствует'}
-
-💡 Для настройки GigaChat:
-1. Получи API ключ на developers.sber.ru
-2. Добавь GIGACHAT_API_KEY в Render
-3. Обнови код для реальных API запросов
-"""
-    bot.send_message(message.chat.id, status_text)
-
-# ОБРАБОТЧИК ВСЕХ СООБЩЕНИЙ С GIGACHAT
+# ОБРАБОТЧИК ВСЕХ СООБЩЕНИЙ
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
-    print(f"💬 Сообщение от {message.chat.id}: {message.text}")
+    chat_id = message.chat.id
+    text = message.text
+    
+    print(f"💬 Сообщение от {chat_id}: {text}")
     
     # Игнорируем команды
-    if message.text.startswith('/'):
+    if text.startswith('/'):
         return
     
-    # Показываем "печатает..."
-    bot.send_chat_action(message.chat.id, 'typing')
-    
     # Получаем ответ от GigaChat
-    giga_response = gigachat.get_response(message.text)
+    giga_response = gigachat.get_response(text)
     
     # Отправляем ответ
-    bot.send_message(message.chat.id, giga_response)
-    print(f"✅ Ответ GigaChat отправлен в чат {message.chat.id}")
+    send_telegram_message(chat_id, giga_response)
+    print(f"✅ Ответ отправлен в {chat_id}")
 
-# Веб-хук endpoint
+# Веб-хук endpoint - УПРОЩЕННАЯ ВЕРСИЯ
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
+        # Получаем данные
         json_data = request.get_json()
+        print(f"📥 Получен webhook: {json.dumps(json_data, indent=2)}")
         
-        # Логируем входящее сообщение
-        if 'message' in json_data:
-            chat_id = json_data['message']['chat']['id']
-            text = json_data['message'].get('text', '')
-            print(f"📥 Чат: {chat_id}, Текст: '{text}'")
-        
-        # Обрабатываем сообщение
+        # Обрабатываем сообщение через бота
         update = telebot.types.Update.de_json(json_data)
         bot.process_new_updates([update])
         
@@ -142,31 +139,27 @@ def webhook():
         return "OK", 200
         
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Ошибка webhook: {e}")
+        import traceback
+        traceback.print_exc()
         return "Error", 500
 
 # Статус страница
 @app.route('/')
 def home():
-    return f"""
+    return """
     <h1>🤖 Telegram Bot + GigaChat</h1>
     <p><strong>Status:</strong> ✅ Active</p>
-    <p><strong>GigaChat:</strong> {'✅ Configured' if gigachat.is_configured else '❌ Not configured'}</p>
-    <p><strong>URL:</strong> {APP_URL}</p>
-    <hr>
     <p>Отправь боту <code>/start</code> в Telegram!</p>
-    <p>Или любое сообщение для теста GigaChat</p>
     """
 
-@app.route('/gigachat_test')
-def gigachat_test():
-    """Тестовая страница для GigaChat"""
-    test_response = gigachat.get_response("Тест из браузера")
-    return f"""
-    <h1>🧠 GigaChat Test</h1>
-    <p><strong>Response:</strong> {test_response}</p>
-    <p><strong>API Key:</strong> {'✅ Present' if GIGACHAT_API_KEY else '❌ Missing'}</p>
-    """
+# Ручная отправка сообщения для теста
+@app.route('/send_test/<chat_id>')
+def send_test_message(chat_id):
+    """Ручная отправка тестового сообщения"""
+    test_text = "🔧 Тест из веб-интерфейса! Бот работает!"
+    success = send_telegram_message(chat_id, test_text)
+    return f"Sent: {success}"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
